@@ -1,0 +1,1478 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>Finn — Your Financial Friend</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://js.stripe.com/v3/"></script>
+<style>
+/*
+=============================================================
+  FINN v3 — COMPLETE SCAFFOLD
+  Auth: Resend magic-link OTP  |  Payments: Stripe
+=============================================================
+
+  RESEND SETUP:
+  1. Create account at resend.com
+  2. Add and verify your sending domain
+  3. Get API key from dashboard
+  4. Replace RESEND_API_KEY with your key (backend only!)
+  5. Replace FROM_EMAIL with your verified sender email
+  Endpoint: POST https://api.resend.com/emails
+  Use Resend for: OTP codes, payment failure alerts,
+  grace period day-2 and day-3 reminder emails
+
+  STRIPE SETUP:
+  1. Create account at stripe.com
+  2. Get Publishable Key + Secret Key from dashboard
+  3. Replace STRIPE_PUBLISHABLE_KEY in the JS below
+  4. Replace STRIPE_SECRET_KEY on your backend/serverless function
+  5. Create a Product in Stripe: Finn Pro — $7/month recurring
+  6. Replace STRIPE_PRICE_ID with your monthly price ID
+  7. Set up webhook to handle:
+       invoice.payment_failed       → start grace period
+       invoice.payment_succeeded    → clear grace period, restore access
+       customer.subscription.deleted → lock account
+  Docs: stripe.com/docs/billing/subscriptions
+
+  SECURITY NOTE:
+  OTP generation/validation and Stripe secret key usage
+  MUST live on a backend or serverless function
+  (Vercel, Supabase Edge Functions, AWS Lambda).
+  Never expose secret keys in frontend code.
+  This file is the complete frontend scaffold —
+  wire your backend endpoints to the API call stubs below.
+=============================================================
+*/
+
+:root {
+  --bg:#080E0A; --card:#0F1E12; --card2:#162019;
+  --green:#00FF87; --green-dim:rgba(0,255,135,0.12); --green-glow:rgba(0,255,135,0.3);
+  --text:#E8F5EC; --text-dim:#7A9B82;
+  --warn:#FFB800; --danger:#FF4D4D; --orange:#FF8C00;
+  --nav-h:72px; --banner-h:0px;
+}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
+html,body{height:100%;background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;overflow:hidden;}
+#app{max-width:430px;margin:0 auto;height:100vh;display:flex;flex-direction:column;position:relative;overflow:hidden;}
+
+/* ── SCREENS ── */
+.screen{position:absolute;inset:0;overflow-y:auto;padding-bottom:calc(var(--nav-h) + var(--banner-h) + 16px);opacity:0;pointer-events:none;transform:translateY(12px);transition:opacity .3s,transform .3s;}
+.screen.active{opacity:1;pointer-events:all;transform:translateY(0);}
+.screen::-webkit-scrollbar{width:0;}
+
+/* ── AUTH SCREENS ── */
+.auth-screen{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:40px 28px;min-height:100vh;background:radial-gradient(ellipse 60% 50% at 50% 30%,rgba(0,255,135,0.08) 0%,transparent 70%);}
+.mascot{font-size:72px;animation:bounce 2s ease-in-out infinite;margin-bottom:20px;}
+@keyframes bounce{0%,100%{transform:translateY(0)}50%{transform:translateY(-10px)}}
+.auth-title{font-family:'Syne',sans-serif;font-size:30px;font-weight:800;text-align:center;line-height:1.15;margin-bottom:8px;}
+.auth-title span{color:var(--green);}
+.auth-sub{color:var(--text-dim);text-align:center;font-size:14px;line-height:1.6;margin-bottom:28px;}
+.auth-card{background:var(--card);border:1px solid rgba(0,255,135,0.15);border-radius:20px;padding:22px;width:100%;margin-bottom:14px;}
+.auth-label{font-size:11px;text-transform:uppercase;letter-spacing:.1em;color:var(--text-dim);margin-bottom:8px;}
+.auth-input{width:100%;background:var(--bg);border:1.5px solid rgba(0,255,135,0.2);border-radius:12px;padding:13px 16px;font-family:'DM Sans',sans-serif;font-size:17px;color:var(--text);outline:none;transition:border-color .2s;}
+.auth-input:focus{border-color:var(--green);}
+.btn-primary{width:100%;background:var(--green);color:#080E0A;border:none;border-radius:14px;padding:16px;font-family:'Syne',sans-serif;font-size:17px;font-weight:700;cursor:pointer;transition:transform .15s,box-shadow .15s;box-shadow:0 0 24px rgba(0,255,135,0.3);}
+.btn-primary:active{transform:scale(0.97);}
+.btn-primary:disabled{opacity:0.5;cursor:not-allowed;}
+.auth-link{font-size:13px;color:var(--text-dim);text-align:center;margin-top:14px;}
+.auth-link a{color:var(--green);text-decoration:none;font-weight:600;}
+.auth-finn{font-size:13px;color:var(--text-dim);text-align:center;margin-top:12px;font-style:italic;}
+
+/* OTP boxes */
+.otp-row{display:flex;gap:10px;justify-content:center;margin-bottom:4px;}
+.otp-box{width:46px;height:56px;background:var(--bg);border:2px solid rgba(0,255,135,0.2);border-radius:12px;font-family:'Syne',sans-serif;font-size:26px;font-weight:800;color:var(--green);text-align:center;outline:none;transition:border-color .2s;}
+.otp-box:focus{border-color:var(--green);}
+.otp-timer{font-size:12px;color:var(--text-dim);text-align:center;margin-top:10px;}
+.otp-resend{font-size:13px;color:var(--green);text-align:center;margin-top:6px;cursor:pointer;font-weight:600;opacity:0.4;pointer-events:none;}
+.otp-resend.active{opacity:1;pointer-events:all;}
+
+/* ── NAV ── */
+#nav{position:absolute;bottom:0;left:0;right:0;height:var(--nav-h);background:rgba(8,14,10,0.96);backdrop-filter:blur(20px);border-top:1px solid rgba(0,255,135,0.1);display:none;z-index:100;}
+.nav-item{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;cursor:pointer;transition:all .2s;}
+.nav-icon{font-size:21px;transition:transform .2s;}
+.nav-label{font-size:9px;font-weight:600;color:var(--text-dim);letter-spacing:.04em;transition:color .2s;}
+.nav-item.active .nav-label{color:var(--green);}
+.nav-item.active .nav-icon{transform:translateY(-2px);}
+
+/* ── STATUS BANNERS ── */
+#status-banner{position:absolute;left:0;right:0;z-index:99;display:none;align-items:center;justify-content:space-between;padding:10px 16px;font-size:13px;font-weight:500;gap:10px;}
+#status-banner.show{display:flex;}
+#status-banner.trial{background:rgba(0,255,135,0.1);border-bottom:1px solid rgba(0,255,135,0.2);color:var(--text);}
+#status-banner.upgrade{background:rgba(0,0,0,0.7);border-bottom:1px solid rgba(0,255,135,0.15);color:var(--text-dim);}
+#status-banner.grace-yellow{background:rgba(255,184,0,0.12);border-bottom:1px solid rgba(255,184,0,0.25);color:var(--warn);}
+#status-banner.grace-orange{background:rgba(255,140,0,0.12);border-bottom:1px solid rgba(255,140,0,0.25);color:var(--orange);}
+#status-banner.grace-red{background:rgba(255,77,77,0.12);border-bottom:1px solid rgba(255,77,77,0.25);color:var(--danger);}
+.banner-btn{background:var(--green);color:#080E0A;border:none;border-radius:8px;padding:6px 12px;font-family:'Syne',sans-serif;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;flex-shrink:0;}
+.banner-btn.warn-btn{background:var(--warn);color:#080E0A;}
+
+/* trial bar */
+.trial-bar-wrap{flex:1;background:rgba(255,255,255,0.08);border-radius:4px;height:5px;overflow:hidden;min-width:60px;}
+.trial-bar{height:100%;border-radius:4px;transition:width .6s ease,background .6s;}
+
+/* ── SHARED ── */
+.page-header{padding:18px 20px 10px;display:flex;align-items:center;justify-content:space-between;}
+.page-title{font-family:'Syne',sans-serif;font-size:22px;font-weight:800;}
+.section{padding:0 16px 16px;}
+.card{background:var(--card);border-radius:18px;padding:18px;border:1px solid rgba(0,255,135,0.06);}
+.label-sm{font-size:11px;text-transform:uppercase;letter-spacing:.1em;color:var(--text-dim);margin-bottom:6px;}
+.tag{display:inline-block;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:600;}
+.tag-green{background:var(--green-dim);color:var(--green);}
+.tag-warn{background:rgba(255,184,0,0.12);color:var(--warn);}
+.tag-danger{background:rgba(255,77,77,0.12);color:var(--danger);}
+.form-row{margin-bottom:12px;}
+.form-label{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--text-dim);margin-bottom:6px;display:block;}
+.form-input,.form-select{width:100%;background:var(--bg);border:1.5px solid rgba(255,255,255,0.08);border-radius:10px;padding:11px 14px;font-family:'DM Sans',sans-serif;font-size:15px;color:var(--text);outline:none;transition:border-color .2s;-webkit-appearance:none;}
+.form-input:focus,.form-select:focus{border-color:var(--green);}
+.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+option{background:#0F1E12;}
+
+/* lock overlay */
+.lock-wrap{position:relative;}
+.lock-overlay{position:absolute;inset:0;border-radius:inherit;background:rgba(8,14,10,0.6);backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;cursor:pointer;z-index:10;border-radius:18px;}
+.lock-badge{background:var(--green-dim);border:1px solid rgba(0,255,135,0.3);border-radius:20px;padding:6px 14px;display:flex;align-items:center;gap:6px;font-size:13px;font-weight:600;color:var(--green);}
+
+/* ── DASHBOARD ── */
+.dash-balance-card{background:var(--card);border-radius:22px;margin:0 16px;padding:22px 22px 18px;border:1px solid rgba(0,255,135,0.15);position:relative;overflow:hidden;}
+.dash-balance-card::before{content:'';position:absolute;top:-40px;right:-40px;width:160px;height:160px;background:radial-gradient(circle,rgba(0,255,135,0.1) 0%,transparent 70%);border-radius:50%;pointer-events:none;}
+.dash-balance-label{font-size:12px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.1em;margin-bottom:6px;}
+.dash-balance-num{font-family:'Syne',sans-serif;font-size:50px;font-weight:800;color:var(--green);line-height:1;}
+.dash-balance-num span{font-size:26px;}
+.dash-meta{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:0 16px 10px;}
+.dash-meta-card{background:var(--card);border-radius:14px;padding:13px;border:1px solid rgba(0,255,135,0.06);}
+.dash-meta-num{font-family:'Syne',sans-serif;font-size:20px;font-weight:700;color:var(--text);}
+.income-strip{margin:0 16px 10px;background:var(--card);border-radius:14px;padding:12px 16px;border:1px solid rgba(0,255,135,0.12);display:flex;align-items:center;justify-content:space-between;}
+.income-strip-num{font-family:'Syne',sans-serif;font-size:17px;font-weight:700;color:var(--green);}
+.btn-icon{background:var(--green-dim);border:1px solid rgba(0,255,135,0.2);border-radius:10px;padding:7px 12px;color:var(--green);font-size:13px;font-weight:600;cursor:pointer;}
+.broke-card{margin:0 16px 10px;background:var(--card);border-radius:18px;padding:18px;border-left:3px solid var(--green);border-top:1px solid rgba(0,255,135,0.06);border-right:1px solid rgba(0,255,135,0.06);border-bottom:1px solid rgba(0,255,135,0.06);}
+.broke-days{font-family:'Syne',sans-serif;font-size:40px;font-weight:800;line-height:1;}
+.broke-date-str{font-family:'Syne',sans-serif;font-size:14px;color:var(--text-dim);margin-top:4px;}
+.broke-bar-wrap{background:rgba(255,255,255,0.06);border-radius:10px;height:8px;margin-top:12px;overflow:hidden;}
+.broke-bar{height:100%;border-radius:10px;transition:width .6s ease;}
+.finn-quote{font-size:13px;font-style:italic;color:var(--text-dim);margin-top:10px;}
+
+/* ── TRANSACTIONS ── */
+.tx-tabs{display:flex;gap:8px;margin:0 16px 14px;}
+.tx-tab{flex:1;padding:9px;border-radius:12px;border:1.5px solid rgba(255,255,255,0.08);background:transparent;color:var(--text-dim);font-family:'DM Sans',sans-serif;font-size:14px;font-weight:600;cursor:pointer;transition:all .2s;text-align:center;}
+.tx-tab.active{background:var(--green-dim);border-color:rgba(0,255,135,0.3);color:var(--green);}
+.tx-form{background:var(--card);border-radius:18px;margin:0 16px 16px;padding:18px;border:1px solid rgba(0,255,135,0.1);}
+.tx-form.income-mode{border-color:rgba(0,255,135,0.3);}
+.btn-add{width:100%;background:var(--green);color:#080E0A;border:none;border-radius:12px;padding:13px;font-family:'Syne',sans-serif;font-size:15px;font-weight:700;cursor:pointer;margin-top:4px;transition:transform .15s;}
+.btn-add:active{transform:scale(0.97);}
+.btn-add.income-btn{background:#00cc6e;}
+.btn-add:disabled{opacity:0.4;cursor:not-allowed;}
+.tx-list{padding:0 16px;}
+.tx-date-group{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--text-dim);padding:12px 0 6px;}
+.tx-item{background:var(--card);border-radius:14px;padding:11px 12px;display:flex;align-items:center;gap:8px;margin-bottom:8px;border:1px solid rgba(255,255,255,0.04);}
+.tx-emoji{font-size:19px;width:30px;text-align:center;flex-shrink:0;}
+.tx-info{flex:1;min-width:0;}
+.tx-desc{font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.tx-cat{font-size:11px;color:var(--text-dim);margin-top:1px;}
+.tx-amount{font-family:'Syne',sans-serif;font-size:14px;font-weight:700;color:var(--danger);flex-shrink:0;}
+.tx-amount.income{color:var(--green);}
+.tx-actions{display:flex;gap:4px;flex-shrink:0;}
+.tx-btn{background:transparent;border:1px solid rgba(255,255,255,0.08);border-radius:8px;padding:4px 7px;font-size:12px;cursor:pointer;}
+.tx-btn.del{border-color:rgba(255,77,77,0.2);}
+.csv-label{display:flex;align-items:center;gap:5px;border:1.5px dashed rgba(0,255,135,0.25);border-radius:10px;padding:7px 12px;color:var(--green);font-size:12px;cursor:pointer;}
+input[type="file"]{display:none;}
+
+/* ── CATEGORIES ── */
+.cat-chart-wrap{position:relative;width:190px;height:190px;margin:0 auto 18px;}
+.cat-center-label{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;pointer-events:none;}
+.cat-center-num{font-family:'Syne',sans-serif;font-size:24px;font-weight:800;color:var(--text);}
+.cat-center-sub{font-size:11px;color:var(--text-dim);}
+.cat-list{display:flex;flex-direction:column;gap:8px;}
+.cat-row{background:var(--card);border-radius:14px;padding:12px 14px;border:1px solid rgba(0,255,135,0.06);}
+.cat-row-top{display:flex;align-items:center;gap:8px;margin-bottom:8px;}
+.cat-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0;}
+.cat-name{flex:1;font-size:14px;font-weight:500;}
+.cat-amt{font-family:'Syne',sans-serif;font-size:14px;font-weight:700;}
+.cat-budget-row{display:flex;align-items:center;gap:8px;}
+.cat-budget-bar-wrap{flex:1;background:rgba(255,255,255,0.06);border-radius:4px;height:6px;overflow:hidden;}
+.cat-budget-bar{height:100%;border-radius:4px;transition:width .5s ease;}
+.cat-budget-label{font-size:11px;color:var(--text-dim);white-space:nowrap;}
+.cat-set-budget{background:transparent;border:1px dashed rgba(255,255,255,0.15);border-radius:6px;padding:3px 8px;font-size:11px;color:var(--text-dim);cursor:pointer;white-space:nowrap;}
+.cat-set-budget:hover{border-color:var(--green);color:var(--green);}
+.budget-inline{display:flex;gap:8px;margin-top:8px;}
+.budget-inline input{flex:1;background:var(--bg);border:1.5px solid rgba(255,255,255,0.1);border-radius:10px;padding:9px 12px;font-family:'DM Sans',sans-serif;font-size:14px;color:var(--text);outline:none;}
+.budget-inline input:focus{border-color:var(--green);}
+.budget-inline button{background:var(--green);border:none;border-radius:10px;padding:9px 14px;font-family:'Syne',sans-serif;font-size:13px;font-weight:700;color:#080E0A;cursor:pointer;}
+
+/* ── BROKE DATE ── */
+.broke-hero{text-align:center;padding:24px 24px 18px;}
+.broke-hero-days{font-family:'Syne',sans-serif;font-size:76px;font-weight:800;line-height:1;}
+.broke-hero-sub{color:var(--text-dim);font-size:14px;margin-top:5px;}
+.broke-hero-date{font-family:'Syne',sans-serif;font-size:20px;font-weight:700;margin-top:8px;}
+.health-meter{margin:0 16px 12px;}
+.health-bar-outer{background:rgba(255,255,255,0.06);border-radius:14px;height:16px;overflow:hidden;}
+.health-bar-inner{height:100%;border-radius:14px;transition:width .8s ease;}
+.stats-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:0 16px;}
+
+/* ── INSIGHTS ── */
+.insights-scroll{display:flex;gap:12px;padding:0 16px;overflow-x:auto;scrollbar-width:none;scroll-snap-type:x mandatory;}
+.insights-scroll::-webkit-scrollbar{display:none;}
+.insight-card{flex-shrink:0;width:255px;background:var(--card);border-radius:18px;padding:20px 16px;border:1px solid rgba(0,255,135,0.08);scroll-snap-align:start;}
+.insight-emoji{font-size:34px;margin-bottom:10px;}
+.insight-text{font-size:15px;font-weight:500;line-height:1.5;}
+.insight-sub{font-size:12px;color:var(--text-dim);margin-top:8px;}
+.fix-card{background:var(--card);border-radius:16px;margin:0 16px 10px;padding:16px;border:1px solid rgba(0,255,135,0.06);display:flex;gap:12px;align-items:flex-start;}
+.fix-icon{font-size:26px;flex-shrink:0;}
+.fix-title{font-size:14px;font-weight:600;margin-bottom:4px;}
+.fix-sub{font-size:13px;color:var(--text-dim);line-height:1.5;}
+.fix-gain{display:inline-block;background:rgba(0,255,135,0.1);color:var(--green);font-size:12px;font-weight:600;padding:3px 10px;border-radius:20px;margin-top:8px;}
+
+/* ── SHARE ── */
+.share-card{width:100%;max-width:400px;height:215px;background:linear-gradient(135deg,#0F1E12 0%,#0a1a0e 100%);border:1.5px solid rgba(0,255,135,0.25);border-radius:24px;margin:0 auto;padding:22px 26px;position:relative;overflow:hidden;display:flex;flex-direction:column;justify-content:space-between;}
+.share-card::before{content:'';position:absolute;top:-60px;right:-60px;width:200px;height:200px;background:radial-gradient(circle,rgba(0,255,135,0.12) 0%,transparent 70%);border-radius:50%;}
+.share-card::after{content:'FINN';position:absolute;bottom:-10px;right:14px;font-family:'Syne',sans-serif;font-size:68px;font-weight:800;color:rgba(0,255,135,0.04);letter-spacing:-2px;}
+.share-logo{font-family:'Syne',sans-serif;font-size:13px;font-weight:700;color:var(--green);}
+.share-balance{font-family:'Syne',sans-serif;font-size:36px;font-weight:800;line-height:1;}
+.share-row{display:flex;gap:22px;}
+.share-stat-label{font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:rgba(232,245,236,0.45);}
+.share-stat-val{font-family:'Syne',sans-serif;font-size:15px;font-weight:700;}
+.share-quote{font-size:11px;font-style:italic;color:rgba(232,245,236,0.4);}
+.share-watermark{position:absolute;bottom:12px;right:20px;font-size:9px;color:rgba(0,255,135,0.25);font-family:'Syne',sans-serif;font-weight:700;letter-spacing:.05em;}
+.share-actions{display:flex;gap:10px;margin:0 16px;}
+.btn-share{flex:1;background:var(--green-dim);border:1px solid rgba(0,255,135,0.25);border-radius:12px;padding:13px;color:var(--green);font-family:'DM Sans',sans-serif;font-size:14px;font-weight:600;cursor:pointer;}
+
+/* ── FRIENDS ── */
+.challenge-card{background:var(--card);border-radius:18px;margin:0 16px 12px;padding:18px;border:1px solid rgba(0,255,135,0.08);}
+.challenge-title{font-family:'Syne',sans-serif;font-size:17px;font-weight:800;margin-bottom:4px;}
+.challenge-meta{font-size:12px;color:var(--text-dim);margin-bottom:12px;}
+.challenge-bar-wrap{background:rgba(255,255,255,0.06);border-radius:8px;height:10px;overflow:hidden;margin-bottom:6px;}
+.challenge-bar{height:100%;border-radius:8px;background:var(--green);transition:width .6s ease;}
+.leaderboard-row{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid rgba(255,255,255,0.04);}
+.leaderboard-row:last-child{border-bottom:none;}
+.lb-rank{font-family:'Syne',sans-serif;font-size:16px;font-weight:800;width:26px;text-align:center;flex-shrink:0;}
+.lb-name{flex:1;font-size:14px;font-weight:500;}
+.lb-bar-wrap{width:90px;background:rgba(255,255,255,0.06);border-radius:4px;height:6px;overflow:hidden;}
+.lb-bar{height:100%;border-radius:4px;background:var(--green);}
+.lb-pct{font-family:'Syne',sans-serif;font-size:13px;font-weight:700;min-width:36px;text-align:right;}
+.lb-me{background:var(--green-dim);border-radius:10px;padding:2px 6px;}
+.btn-challenge{width:100%;background:var(--green);color:#080E0A;border:none;border-radius:12px;padding:13px;font-family:'Syne',sans-serif;font-size:15px;font-weight:700;cursor:pointer;margin:0 0 12px;}
+.btn-challenge:disabled{opacity:0.4;cursor:not-allowed;}
+.new-challenge-form{background:var(--card);border-radius:18px;margin:0 16px 16px;padding:18px;border:1px solid rgba(0,255,135,0.15);display:none;}
+.new-challenge-form.open{display:block;}
+
+/* ── PAYWALL ── */
+#screen-paywall{display:flex;flex-direction:column;align-items:center;padding:32px 24px 40px;overflow-y:auto;}
+.paywall-mascot{font-size:56px;margin-bottom:16px;animation:bounce 2s ease-in-out infinite;}
+.paywall-title{font-family:'Syne',sans-serif;font-size:26px;font-weight:800;text-align:center;margin-bottom:6px;}
+.paywall-sub{color:var(--text-dim);font-size:14px;text-align:center;margin-bottom:24px;line-height:1.6;}
+.paywall-price{font-family:'Syne',sans-serif;font-size:40px;font-weight:800;color:var(--green);text-align:center;margin-bottom:4px;}
+.paywall-price span{font-size:18px;color:var(--text-dim);}
+.feature-list{width:100%;background:var(--card);border-radius:18px;padding:18px;margin-bottom:20px;border:1px solid rgba(0,255,135,0.1);}
+.feature-item{display:flex;align-items:center;gap:10px;padding:7px 0;font-size:14px;}
+.feature-item::before{content:'✓';color:var(--green);font-weight:800;font-size:15px;flex-shrink:0;}
+#stripe-card-element{background:var(--bg);border:1.5px solid rgba(255,255,255,0.1);border-radius:12px;padding:14px;margin-bottom:14px;width:100%;}
+.paywall-fine{font-size:12px;color:var(--text-dim);text-align:center;margin-top:10px;}
+.paywall-error{font-size:13px;color:var(--danger);text-align:center;margin-top:8px;min-height:20px;}
+
+/* ── EDIT MODAL ── */
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.75);backdrop-filter:blur(4px);z-index:200;display:flex;align-items:flex-end;justify-content:center;opacity:0;pointer-events:none;transition:opacity .25s;}
+.modal-overlay.open{opacity:1;pointer-events:all;}
+.modal{background:var(--card);border-radius:24px 24px 0 0;padding:22px 20px 36px;width:100%;max-width:430px;border-top:1px solid rgba(0,255,135,0.15);transform:translateY(40px);transition:transform .3s ease;}
+.modal-overlay.open .modal{transform:translateY(0);}
+.modal-title{font-family:'Syne',sans-serif;font-size:17px;font-weight:800;margin-bottom:16px;display:flex;align-items:center;justify-content:space-between;}
+.modal-close{background:rgba(255,255,255,0.07);border:none;border-radius:8px;padding:5px 10px;color:var(--text-dim);font-size:16px;cursor:pointer;}
+.btn-save{width:100%;background:var(--green);color:#080E0A;border:none;border-radius:12px;padding:13px;font-family:'Syne',sans-serif;font-size:15px;font-weight:700;cursor:pointer;margin-top:8px;}
+
+/* ── EMPTY + TOAST ── */
+.empty-state{text-align:center;padding:44px 24px;color:var(--text-dim);}
+.empty-emoji{font-size:44px;margin-bottom:12px;}
+.empty-text{font-size:14px;line-height:1.6;font-style:italic;}
+#toast{position:fixed;bottom:calc(var(--nav-h) + 14px);left:50%;transform:translateX(-50%) translateY(20px);background:var(--card2);border:1px solid rgba(0,255,135,0.2);color:var(--text);padding:11px 20px;border-radius:12px;font-size:14px;opacity:0;transition:all .3s;pointer-events:none;z-index:999;white-space:nowrap;}
+#toast.show{opacity:1;transform:translateX(-50%) translateY(0);}
+
+/* confetti */
+.confetti-piece{position:fixed;width:10px;height:10px;border-radius:2px;animation:confetti-fall 1.2s ease-in forwards;z-index:999;}
+@keyframes confetti-fall{0%{transform:translateY(-20px) rotate(0deg);opacity:1;}100%{transform:translateY(100vh) rotate(720deg);opacity:0;}}
+</style>
+</head>
+<body>
+<div id="app">
+
+  <!-- ══ AUTH: SIGNUP / LOGIN ══ -->
+  <div id="screen-auth" class="screen active" style="padding-bottom:0;overflow-y:auto;">
+    <div class="auth-screen">
+      <div class="mascot">🟢</div>
+      <h1 class="auth-title">Meet <span>Finn.</span><br>Your wallet's new<br>best friend.</h1>
+      <p class="auth-sub" id="auth-sub-text">Let's make it official. Drop your email.</p>
+      <div class="auth-card">
+        <div class="auth-label">Email address</div>
+        <input class="auth-input" id="auth-email" type="email" inputmode="email" placeholder="you@example.com" autocomplete="email">
+      </div>
+      <button class="btn-primary" id="auth-email-btn" onclick="submitEmail()">Continue with Email →</button>
+      <div class="auth-link" id="auth-toggle-link">
+        Don't have an account? <a href="#" onclick="toggleAuthMode(event)">Sign up free</a>
+      </div>
+      <p class="auth-finn">"I'm better with money than I am with feelings."</p>
+    </div>
+  </div>
+
+  <!-- ══ AUTH: OTP VERIFY ══ -->
+  <div id="screen-otp" class="screen" style="padding-bottom:0;overflow-y:auto;">
+    <div class="auth-screen">
+      <div class="mascot" style="font-size:52px;margin-bottom:16px;">📬</div>
+      <h1 class="auth-title" style="font-size:24px;">Check your inbox</h1>
+      <p class="auth-sub">We sent a 6-digit code to<br><strong id="otp-email-display" style="color:var(--green)"></strong></p>
+      <div class="auth-card">
+        <div class="auth-label">Verification code</div>
+        <div class="otp-row" id="otp-row">
+          <input class="otp-box" maxlength="1" type="text" inputmode="numeric" pattern="[0-9]">
+          <input class="otp-box" maxlength="1" type="text" inputmode="numeric" pattern="[0-9]">
+          <input class="otp-box" maxlength="1" type="text" inputmode="numeric" pattern="[0-9]">
+          <input class="otp-box" maxlength="1" type="text" inputmode="numeric" pattern="[0-9]">
+          <input class="otp-box" maxlength="1" type="text" inputmode="numeric" pattern="[0-9]">
+          <input class="otp-box" maxlength="1" type="text" inputmode="numeric" pattern="[0-9]">
+        </div>
+        <div class="otp-timer" id="otp-timer">Resend in 60s</div>
+        <div class="otp-resend" id="otp-resend" onclick="resendCode()">Resend Code</div>
+      </div>
+      <button class="btn-primary" id="otp-verify-btn" onclick="verifyOTP()">Verify Code</button>
+      <div class="auth-link" style="margin-top:10px;"><a href="#" onclick="goToAuth(event)">← Use a different email</a></div>
+      <p id="otp-error" style="color:var(--danger);font-size:13px;text-align:center;margin-top:10px;min-height:18px;"></p>
+    </div>
+  </div>
+
+  <!-- ══ STATUS BANNER ══ -->
+  <div id="status-banner"></div>
+
+  <!-- ══ DASHBOARD ══ -->
+  <div id="screen-dash" class="screen">
+    <div class="page-header">
+      <div>
+        <div style="font-size:12px;color:var(--text-dim)" id="dash-greeting">Hey there 👋</div>
+        <div class="page-title">Dashboard</div>
+      </div>
+      <div style="font-size:26px;animation:bounce 3s ease-in-out infinite;">🟢</div>
+    </div>
+    <div id="dash-balance-wrap" class="lock-wrap" style="margin:0 16px 10px;">
+      <div class="dash-balance-card" style="margin:0;">
+        <div class="dash-balance-label">Current Balance</div>
+        <div class="dash-balance-num" id="dash-balance"><span>$</span>0.00</div>
+        <div style="margin-top:8px;" id="dash-status-tag"></div>
+      </div>
+    </div>
+    <div class="income-strip">
+      <div style="display:flex;align-items:center;gap:10px;">
+        <div style="font-size:20px">💚</div>
+        <div>
+          <div style="font-size:11px;color:var(--text-dim);">Monthly Income</div>
+          <div class="income-strip-num" id="dash-income-num">$0</div>
+        </div>
+      </div>
+      <button class="btn-icon" onclick="isPro()?goTo('tx')&&setTimeout(()=>setTxTab('income'),50):showPaywall()">+ Income</button>
+    </div>
+    <div class="dash-meta">
+      <div class="dash-meta-card">
+        <div class="label-sm">Daily Burn</div>
+        <div class="dash-meta-num" id="dash-daily">$0</div>
+        <div style="font-size:11px;color:var(--text-dim);margin-top:2px;">per day avg</div>
+      </div>
+      <div class="dash-meta-card">
+        <div class="label-sm">This Month</div>
+        <div class="dash-meta-num" id="dash-monthly">$0</div>
+        <div style="font-size:11px;color:var(--text-dim);margin-top:2px;">spent</div>
+      </div>
+    </div>
+    <div class="broke-card" id="dash-broke-card">
+      <div class="label-sm">💀 Broke Date</div>
+      <div style="display:flex;align-items:baseline;gap:8px;margin-top:5px;">
+        <div class="broke-days" id="dash-days">–</div>
+        <div style="font-size:14px;color:var(--text-dim);">days left</div>
+      </div>
+      <div class="broke-date-str" id="dash-broke-date">Add transactions to get your prediction</div>
+      <div class="broke-bar-wrap"><div class="broke-bar" id="dash-broke-bar" style="width:100%;background:var(--green)"></div></div>
+      <div class="finn-quote" id="dash-finn-quote"></div>
+    </div>
+    <div style="height:8px;"></div>
+  </div>
+
+  <!-- ══ TRANSACTIONS ══ -->
+  <div id="screen-tx" class="screen">
+    <div class="page-header">
+      <div class="page-title">Transactions</div>
+      <label for="csv-upload" class="csv-label" id="csv-label-btn">📎 CSV</label>
+      <input type="file" id="csv-upload" accept=".csv" onchange="handleCSV(event)">
+    </div>
+    <div class="tx-tabs">
+      <button class="tx-tab active" id="tab-expense" onclick="setTxTab('expense')">💸 Expense</button>
+      <button class="tx-tab" id="tab-income" onclick="setTxTab('income')">💚 Income</button>
+    </div>
+    <div class="tx-form" id="tx-form-box">
+      <div class="form-grid">
+        <div class="form-row"><label class="form-label">Date</label><input class="form-input" type="date" id="tx-date"></div>
+        <div class="form-row"><label class="form-label">Amount ($)</label><input class="form-input" type="number" inputmode="decimal" id="tx-amount" placeholder="0.00"></div>
+      </div>
+      <div class="form-row"><label class="form-label">Description</label><input class="form-input" type="text" id="tx-desc" placeholder="e.g. Starbucks, Netflix…"></div>
+      <div class="form-row" id="tx-cat-row">
+        <label class="form-label">Category</label>
+        <select class="form-select" id="tx-cat">
+          <option value="auto">🤖 Auto-detect</option>
+          <option value="food">🍔 Food</option>
+          <option value="subscriptions">📱 Subscriptions</option>
+          <option value="shopping">🛍️ Shopping</option>
+          <option value="transport">🚗 Transport</option>
+          <option value="housing">🏠 Housing</option>
+          <option value="entertainment">🎮 Entertainment</option>
+          <option value="other">📦 Other</option>
+        </select>
+      </div>
+      <button class="btn-add" id="tx-add-btn" onclick="addTransaction()">+ Add Expense</button>
+    </div>
+    <div class="tx-list" id="tx-list"></div>
+  </div>
+
+  <!-- ══ CATEGORIES / BUDGET ══ -->
+  <div id="screen-cats" class="screen">
+    <div class="page-header"><div class="page-title">Budget</div><div style="font-size:12px;color:var(--text-dim)">tap to set limits</div></div>
+    <div class="section">
+      <div class="card lock-wrap" id="cat-chart-wrap-outer">
+        <div class="cat-chart-wrap"><canvas id="cat-chart"></canvas>
+          <div class="cat-center-label"><div class="cat-center-num" id="cat-total">$0</div><div class="cat-center-sub">total spent</div></div>
+        </div>
+      </div>
+    </div>
+    <div class="section"><div class="cat-list" id="cat-list"></div></div>
+  </div>
+
+  <!-- ══ BROKE DATE ══ -->
+  <div id="screen-broke" class="screen">
+    <div class="page-header"><div class="page-title">Broke Date</div></div>
+    <div class="broke-hero">
+      <div style="color:var(--text-dim);font-size:13px;">You have</div>
+      <div class="broke-hero-days" id="broke-days-big">–</div>
+      <div class="broke-hero-sub">days until you're broke</div>
+      <div class="broke-hero-date" id="broke-date-big">Add transactions to predict</div>
+    </div>
+    <div class="health-meter"><div class="label-sm" style="margin-bottom:8px;">Financial Health</div>
+      <div class="health-bar-outer"><div class="health-bar-inner" id="health-bar" style="width:50%;background:var(--green)"></div></div>
+    </div>
+    <div style="height:12px;"></div>
+    <div class="stats-grid">
+      <div class="dash-meta-card"><div class="label-sm">Daily Spend</div><div class="dash-meta-num" id="broke-daily">$0</div></div>
+      <div class="dash-meta-card"><div class="label-sm">Monthly Rate</div><div class="dash-meta-num" id="broke-monthly-rate">$0</div></div>
+    </div>
+    <div style="height:12px;"></div>
+    <div class="section"><div class="card"><div class="label-sm">🤖 Finn says</div>
+      <div style="font-size:15px;margin-top:8px;line-height:1.6;font-style:italic;" id="broke-finn-say">"Add some transactions and I'll tell you exactly when things go sideways."</div>
+    </div></div>
+  </div>
+
+  <!-- ══ INSIGHTS ══ -->
+  <div id="screen-insights" class="screen">
+    <div class="page-header"><div class="page-title">Finn Insights</div><div style="font-size:12px;color:var(--text-dim)">swipe →</div></div>
+    <div class="insights-scroll" id="insights-list"></div>
+    <div style="height:16px;"></div>
+    <div class="page-header" style="padding-top:0;"><div class="page-title" style="font-size:18px;">Fix My Finances 🔧</div></div>
+    <div id="fix-list"></div>
+    <div style="height:8px;"></div>
+    <div class="section">
+      <button class="btn-add" id="fix-btn" onclick="isPro()?renderFix():showPaywall()" style="border-radius:14px;">🔧 Get Personalized Fixes</button>
+    </div>
+  </div>
+
+  <!-- ══ SHARE ══ -->
+  <div id="screen-share" class="screen">
+    <div class="page-header"><div class="page-title">Share Card</div></div>
+    <div class="section">
+      <div class="share-card">
+        <div class="share-logo">🟢 FINN</div>
+        <div class="share-balance" id="share-bal">$0.00</div>
+        <div class="share-row">
+          <div><div class="share-stat-label">Daily Spend</div><div class="share-stat-val" id="share-daily">$0</div></div>
+          <div><div class="share-stat-label">Broke Date</div><div class="share-stat-val" id="share-broke">–</div></div>
+        </div>
+        <div class="share-quote" id="share-quote">"Your wallet is sweating."</div>
+        <div class="share-watermark">made with Finn</div>
+      </div>
+    </div>
+    <div style="height:14px;"></div>
+    <div class="share-actions lock-wrap" id="share-actions-wrap">
+      <button class="btn-share" onclick="copyCard()">📋 Copy Stats</button>
+      <button class="btn-share" onclick="shareCard()">📤 Share</button>
+    </div>
+    <div style="height:14px;"></div>
+    <div class="section"><div class="card">
+      <div class="label-sm">🎯 Finn Roasts Your Card</div>
+      <div style="font-size:14px;line-height:1.6;margin-top:8px;color:var(--text-dim);font-style:italic;" id="share-roast">"Come back when you've got something to roast."</div>
+    </div></div>
+  </div>
+
+  <!-- ══ FRIENDS ══ -->
+  <div id="screen-friends" class="screen">
+    <div class="page-header"><div class="page-title">Friends 🏆</div></div>
+    <div style="padding:0 16px 12px;">
+      <button class="btn-challenge" id="new-challenge-btn" onclick="isPro()?toggleNewChallenge():showPaywall()">+ Start a Challenge</button>
+      <div class="new-challenge-form" id="new-challenge-form">
+        <div class="form-row"><label class="form-label">Goal Name</label><input class="form-input" id="ch-name" placeholder="e.g. Summer Trip Fund"></div>
+        <div class="form-grid">
+          <div class="form-row"><label class="form-label">Target ($)</label><input class="form-input" type="number" id="ch-target" placeholder="500"></div>
+          <div class="form-row"><label class="form-label">Deadline</label><input class="form-input" type="date" id="ch-deadline"></div>
+        </div>
+        <button class="btn-add" onclick="createChallenge()">Create Challenge 🚀</button>
+      </div>
+    </div>
+    <div id="challenges-list"></div>
+  </div>
+
+  <!-- ══ PAYWALL ══ -->
+  <div id="screen-paywall" class="screen" style="padding-bottom:40px;">
+    <div class="paywall-mascot">🟢</div>
+    <div class="paywall-title">Keep the streak alive.<br>Go Pro.</div>
+    <div class="paywall-sub" id="paywall-sub-text">Unlock everything Finn has to offer.</div>
+    <div class="paywall-price">$7<span>/month</span></div>
+    <div class="feature-list">
+      <div class="feature-item">Broke Date prediction</div>
+      <div class="feature-item">Dashboard & balance tracking</div>
+      <div class="feature-item">Transactions & CSV upload</div>
+      <div class="feature-item">Spending categories & charts</div>
+      <div class="feature-item">Finn AI insights</div>
+      <div class="feature-item">Fix My Finances suggestions</div>
+      <div class="feature-item">Shareable Broke Date card</div>
+      <div class="feature-item">Friends savings challenges</div>
+      <div class="feature-item">Budget limits per category</div>
+      <div class="feature-item">Weekly Finn nudges</div>
+    </div>
+    <div id="stripe-card-element"></div>
+    <button class="btn-primary" id="pay-btn" onclick="handlePayment()">Start Finn Pro 🚀</button>
+    <div class="paywall-error" id="pay-error"></div>
+    <div class="paywall-fine">Cancel anytime. No hard feelings.</div>
+    <div style="height:16px;"></div>
+    <button onclick="goTo('dash')" style="background:transparent;border:none;color:var(--text-dim);font-size:13px;cursor:pointer;margin-top:4px;">← Back to app</button>
+  </div>
+
+  <!-- ══ NAV ══ -->
+  <nav id="nav" style="display:none;flex:none;">
+    <div class="nav-item active" onclick="goTo('dash')" data-screen="dash"><div class="nav-icon">🏠</div><div class="nav-label">Home</div></div>
+    <div class="nav-item" onclick="goTo('tx')" data-screen="tx"><div class="nav-icon">💸</div><div class="nav-label">Spend</div></div>
+    <div class="nav-item" onclick="goTo('cats')" data-screen="cats"><div class="nav-icon">🎯</div><div class="nav-label">Budget</div></div>
+    <div class="nav-item" onclick="goTo('broke')" data-screen="broke"><div class="nav-icon">💀</div><div class="nav-label">Broke</div></div>
+    <div class="nav-item" onclick="goTo('insights')" data-screen="insights"><div class="nav-icon">✨</div><div class="nav-label">Insights</div></div>
+    <div class="nav-item" onclick="goTo('friends')" data-screen="friends"><div class="nav-icon">🏆</div><div class="nav-label">Friends</div></div>
+  </nav>
+</div>
+
+<!-- EDIT MODAL -->
+<div class="modal-overlay" id="edit-modal">
+  <div class="modal">
+    <div class="modal-title">Edit Transaction <button class="modal-close" onclick="closeModal()">✕</button></div>
+    <input type="hidden" id="edit-id">
+    <div class="form-grid">
+      <div class="form-row"><label class="form-label">Date</label><input class="form-input" type="date" id="edit-date"></div>
+      <div class="form-row"><label class="form-label">Amount ($)</label><input class="form-input" type="number" inputmode="decimal" id="edit-amount"></div>
+    </div>
+    <div class="form-row"><label class="form-label">Description</label><input class="form-input" type="text" id="edit-desc"></div>
+    <div class="form-row" id="edit-cat-row">
+      <label class="form-label">Category</label>
+      <select class="form-select" id="edit-cat">
+        <option value="food">🍔 Food</option><option value="subscriptions">📱 Subscriptions</option>
+        <option value="shopping">🛍️ Shopping</option><option value="transport">🚗 Transport</option>
+        <option value="housing">🏠 Housing</option><option value="entertainment">🎮 Entertainment</option>
+        <option value="other">📦 Other</option>
+      </select>
+    </div>
+    <button class="btn-save" onclick="saveEdit()">Save Changes ✅</button>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+// ═══════════════════════════════════════════════════════
+//  CONFIG — replace with your actual keys via your backend
+// ═══════════════════════════════════════════════════════
+const CONFIG = {
+  STRIPE_PUBLISHABLE_KEY: 'pk_test_REPLACE_WITH_YOUR_STRIPE_KEY',
+  STRIPE_PRICE_ID: 'price_REPLACE_WITH_YOUR_PRICE_ID',
+  // Backend endpoints — wire to your Vercel/Supabase/Lambda functions:
+  API_SEND_OTP:    '/api/auth/send-otp',    // POST {email} → sends OTP via Resend
+  API_VERIFY_OTP:  '/api/auth/verify-otp',  // POST {email, code} → returns {token, user}
+  API_CREATE_SUB:  '/api/stripe/subscribe', // POST {paymentMethodId, email} → creates Stripe subscription
+  API_UPDATE_CARD: '/api/stripe/update-card',// POST {paymentMethodId, email} → updates card
+};
+
+// ═══════════════════════════════════════════════════════
+//  STATE
+// ═══════════════════════════════════════════════════════
+let state = {
+  // Auth
+  session: null,       // {token, email, expiresAt}
+  user: null,          // {email, trialStart, trialEnd, subStatus, subExpiry, paymentFailedAt, gracePeriodExpiry, hadPreviousPayment}
+  // Finance
+  balance: 0,
+  monthlyIncome: 0,
+  transactions: [],
+  budgets: {},
+  challenges: [],
+};
+
+let txMode = 'expense';
+let catChart = null;
+let stripe = null;
+let stripeCardElement = null;
+let authMode = 'login'; // 'login' | 'signup'
+let pendingEmail = '';
+let otpTimerInterval = null;
+
+// ═══════════════════════════════════════════════════════
+//  CATEGORIES
+// ═══════════════════════════════════════════════════════
+const CATS = {
+  food:          {label:'Food',          emoji:'🍔', color:'#00FF87'},
+  subscriptions: {label:'Subscriptions', emoji:'📱', color:'#00D4FF'},
+  shopping:      {label:'Shopping',      emoji:'🛍️', color:'#FF6B6B'},
+  transport:     {label:'Transport',     emoji:'🚗', color:'#FFB800'},
+  housing:       {label:'Housing',       emoji:'🏠', color:'#A855F7'},
+  entertainment: {label:'Entertainment', emoji:'🎮', color:'#FF6EC7'},
+  other:         {label:'Other',         emoji:'📦', color:'#6B7280'},
+  income:        {label:'Income',        emoji:'💚', color:'#00FF87'},
+};
+const AUTO_CATS = {
+  food:          ['starbucks','mcdonalds','chipotle','subway','pizza','burger','taco','sushi','doordash','grubhub','uber eats','ubereats','wendy','dunkin','coffee','cafe','restaurant','diner','kfc','popeyes','dominos','food','lunch','dinner','breakfast','grocery','safeway','whole foods','trader joe','kroger','walmart','target','costco'],
+  subscriptions: ['netflix','spotify','hulu','disney','apple','amazon prime','youtube','hbo','paramount','peacock','adobe','microsoft','google','dropbox','notion','slack','zoom','github','subscription','monthly'],
+  shopping:      ['amazon','ebay','etsy','shein','zara','h&m','uniqlo','nike','adidas','nordstrom','macy','best buy','clothing','shoes','shopping','retail'],
+  transport:     ['uber','lyft','taxi','gas','shell','bp','chevron','exxon','transport','metro','transit','bus','train','parking','toll','flight','airline','airbnb','hotel'],
+  housing:       ['rent','mortgage','electric','water','internet','utilities','insurance','lease','apartment','landlord','comcast','at&t','verizon'],
+  entertainment: ['cinema','movie','concert','ticket','game','steam','playstation','xbox','bar','club','nightclub','bowling','laser','arcade'],
+};
+function autoCat(desc){const d=desc.toLowerCase();for(const[c,kws]of Object.entries(AUTO_CATS)){if(kws.some(k=>d.includes(k)))return c;}return 'other';}
+
+// ═══════════════════════════════════════════════════════
+//  DEMO DATA
+// ═══════════════════════════════════════════════════════
+function daysAgo(n){const d=new Date();d.setDate(d.getDate()-n);return d.toISOString().split('T')[0];}
+function daysFromNow(n){const d=new Date();d.setDate(d.getDate()+n);return d.toISOString().split('T')[0];}
+
+const SAMPLE_TXS=[
+  {id:1,  date:daysAgo(1),  desc:'Starbucks',          amount:6.75,  cat:'food',          type:'expense'},
+  {id:2,  date:daysAgo(1),  desc:'Netflix',             amount:15.99, cat:'subscriptions', type:'expense'},
+  {id:3,  date:daysAgo(2),  desc:'Uber to Airport',     amount:34.20, cat:'transport',     type:'expense'},
+  {id:4,  date:daysAgo(2),  desc:'Chipotle',            amount:12.50, cat:'food',          type:'expense'},
+  {id:5,  date:daysAgo(3),  desc:'Amazon Order',        amount:47.99, cat:'shopping',      type:'expense'},
+  {id:6,  date:daysAgo(3),  desc:'Spotify Premium',     amount:9.99,  cat:'subscriptions', type:'expense'},
+  {id:7,  date:daysAgo(4),  desc:"McDonald's",          amount:8.25,  cat:'food',          type:'expense'},
+  {id:8,  date:daysAgo(4),  desc:'Shell Gas Station',   amount:55.00, cat:'transport',     type:'expense'},
+  {id:9,  date:daysAgo(5),  desc:'Whole Foods',         amount:83.42, cat:'food',          type:'expense'},
+  {id:10, date:daysAgo(5),  desc:'Rent',                amount:950.00,cat:'housing',       type:'expense'},
+  {id:11, date:daysAgo(6),  desc:'Hulu + Disney',       amount:19.99, cat:'subscriptions', type:'expense'},
+  {id:12, date:daysAgo(7),  desc:'DoorDash Thai Food',  amount:28.50, cat:'food',          type:'expense'},
+  {id:13, date:daysAgo(8),  desc:'Lyft Home',           amount:18.75, cat:'transport',     type:'expense'},
+  {id:14, date:daysAgo(9),  desc:'Nike Shoes',          amount:110.00,cat:'shopping',      type:'expense'},
+  {id:15, date:daysAgo(10), desc:'Bar Tab Saturday',    amount:67.00, cat:'entertainment', type:'expense'},
+  {id:16, date:daysAgo(11), desc:'Adobe Creative Cloud',amount:54.99, cat:'subscriptions', type:'expense'},
+  {id:17, date:daysAgo(12), desc:'Parking Downtown',    amount:22.00, cat:'transport',     type:'expense'},
+  {id:18, date:daysAgo(14), desc:'Movie Tickets x2',    amount:31.00, cat:'entertainment', type:'expense'},
+  {id:19, date:daysAgo(16), desc:'Target Run',          amount:72.18, cat:'shopping',      type:'expense'},
+  {id:20, date:daysAgo(18), desc:'Dunkin Donuts',       amount:5.50,  cat:'food',          type:'expense'},
+];
+const SAMPLE_CHALLENGES=[
+  {id:'c1', name:'Summer Trip Fund', target:500, deadline:daysFromNow(45), emoji:'✈️',
+   members:[{name:'You',pct:45,me:true},{name:'Jake',pct:62},{name:'Mia',pct:31},{name:'Sam',pct:55}]},
+  {id:'c2', name:'No Spend November', target:200, deadline:daysFromNow(18), emoji:'🚫',
+   members:[{name:'You',pct:68,me:true},{name:'Alex',pct:40}]},
+];
+
+// ═══════════════════════════════════════════════════════
+//  PERSISTENCE
+// ═══════════════════════════════════════════════════════
+function save(){localStorage.setItem('finn_v3',JSON.stringify(state));}
+function load(){
+  const s=localStorage.getItem('finn_v3');
+  if(s){state={...state,...JSON.parse(s)};return true;}
+  return false;
+}
+
+// ═══════════════════════════════════════════════════════
+//  USER STATE HELPERS
+// ═══════════════════════════════════════════════════════
+function isSessionValid(){
+  if(!state.session||!state.session.token) return false;
+  return new Date(state.session.expiresAt)>new Date();
+}
+function isTrialActive(){
+  if(!state.user) return false;
+  return state.user.trialEnd && new Date(state.user.trialEnd)>new Date();
+}
+function isSubActive(){
+  if(!state.user) return false;
+  return state.user.subStatus==='active' && (!state.user.subExpiry||new Date(state.user.subExpiry)>new Date());
+}
+function isGracePeriodActive(){
+  if(!state.user||!state.user.gracePeriodExpiry) return false;
+  return state.user.paymentFailedAt && new Date(state.user.gracePeriodExpiry)>new Date();
+}
+function isPro(){return isTrialActive()||isSubActive()||isGracePeriodActive();}
+function trialDaysLeft(){
+  if(!state.user||!state.user.trialEnd) return 0;
+  return Math.max(0,Math.ceil((new Date(state.user.trialEnd)-new Date())/86400000));
+}
+function graceDaysLeft(){
+  if(!state.user||!state.user.gracePeriodExpiry) return 0;
+  return Math.max(0,Math.ceil((new Date(state.user.gracePeriodExpiry)-new Date())/86400000));
+}
+
+// User state enum
+function getUserState(){
+  if(!isSessionValid()) return 'no-session';
+  if(isTrialActive()) return 'trial';
+  if(isSubActive()) return 'active';
+  if(isGracePeriodActive()) return 'grace';
+  if(state.user&&state.user.subStatus==='past_due'&&new Date(state.user.gracePeriodExpiry)<new Date()) return 'grace-expired';
+  return 'free-expired';
+}
+
+// ═══════════════════════════════════════════════════════
+//  INIT
+// ═══════════════════════════════════════════════════════
+window.onload=function(){
+  document.getElementById('tx-date').value=new Date().toISOString().split('T')[0];
+  initStripe();
+  load();
+  const ustate=getUserState();
+  if(ustate==='no-session'){showAuthScreen();return;}
+  // Has session — boot into app
+  bootApp();
+};
+
+function initStripe(){
+  try{
+    stripe=Stripe(CONFIG.STRIPE_PUBLISHABLE_KEY);
+    const elements=stripe.elements();
+    stripeCardElement=elements.create('card',{style:{base:{color:'#E8F5EC',fontFamily:'DM Sans, sans-serif',fontSize:'16px','::placeholder':{color:'#7A9B82'}},invalid:{color:'#FF4D4D'}}});
+    // Mount once paywall screen is shown
+  }catch(e){console.warn('Stripe init failed (expected in demo):',e);}
+}
+
+function bootApp(){
+  showNav();
+  updateBanner();
+  applyLocks();
+  goTo('dash');
+  if(state.transactions.length===0){
+    state.transactions=SAMPLE_TXS.map(t=>({...t}));
+    state.challenges=SAMPLE_CHALLENGES.map(c=>({...c}));
+    state.balance=1240;
+    state.monthlyIncome=2800;
+    save();
+  }
+}
+
+function showNav(){
+  document.getElementById('nav').style.display='flex';
+  // Adjust nav layout
+  const nav=document.getElementById('nav');
+  nav.style.display='flex';
+}
+
+// ═══════════════════════════════════════════════════════
+//  AUTH FLOW
+// ═══════════════════════════════════════════════════════
+function showAuthScreen(){
+  document.getElementById('screen-auth').classList.add('active');
+}
+function toggleAuthMode(e){
+  e.preventDefault();
+  authMode=authMode==='login'?'signup':'login';
+  const link=document.getElementById('auth-toggle-link');
+  const sub=document.getElementById('auth-sub-text');
+  if(authMode==='signup'){
+    sub.textContent="Let's make it official. Drop your email.";
+    link.innerHTML='Already have an account? <a href="#" onclick="toggleAuthMode(event)">Log in</a>';
+  }else{
+    sub.textContent="Welcome back. What's your email?";
+    link.innerHTML="Don't have an account? <a href=\"#\" onclick=\"toggleAuthMode(event)\">Sign up free</a>";
+  }
+}
+function goToAuth(e){e.preventDefault();showScreen('auth');}
+
+async function submitEmail(){
+  const email=document.getElementById('auth-email').value.trim();
+  if(!email||!email.includes('@')){toast("That doesn't look like an email, Finn's not judging… actually he is 🙃");return;}
+  pendingEmail=email;
+  document.getElementById('otp-email-display').textContent=email;
+  const btn=document.getElementById('auth-email-btn');
+  btn.disabled=true;btn.textContent='Sending…';
+
+  // ── BACKEND CALL: POST CONFIG.API_SEND_OTP {email, mode: authMode}
+  // Your backend generates a 6-digit OTP, stores it with a 10min expiry,
+  // and sends it via Resend. Replace the setTimeout below with a real fetch:
+  //
+  // const res = await fetch(CONFIG.API_SEND_OTP,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email,mode:authMode})});
+  // const data = await res.json();
+  // if(!res.ok){toast(data.message||"Finn had trouble sending that. Try again.");btn.disabled=false;btn.textContent='Continue with Email →';return;}
+
+  // DEMO: simulate success
+  await new Promise(r=>setTimeout(r,900));
+  btn.disabled=false;btn.textContent='Continue with Email →';
+  showScreen('otp');
+  startOtpTimer();
+}
+
+function startOtpTimer(){
+  let secs=60;
+  clearInterval(otpTimerInterval);
+  document.getElementById('otp-resend').classList.remove('active');
+  const timerEl=document.getElementById('otp-timer');
+  otpTimerInterval=setInterval(()=>{
+    secs--;timerEl.textContent=secs>0?`Resend in ${secs}s`:'';
+    if(secs<=0){clearInterval(otpTimerInterval);document.getElementById('otp-resend').classList.add('active');}
+  },1000);
+  // OTP box auto-advance
+  const boxes=document.querySelectorAll('.otp-box');
+  boxes.forEach((box,i)=>{
+    box.value='';
+    box.oninput=()=>{if(box.value.length===1&&i<5)boxes[i+1].focus();};
+    box.onkeydown=(e)=>{if(e.key==='Backspace'&&!box.value&&i>0)boxes[i-1].focus();};
+  });
+  boxes[0].focus();
+}
+
+async function resendCode(){
+  document.getElementById('otp-resend').classList.remove('active');
+  // ── BACKEND CALL: POST CONFIG.API_SEND_OTP {email: pendingEmail}
+  await new Promise(r=>setTimeout(r,600));
+  startOtpTimer();toast("New code sent 📬");
+}
+
+async function verifyOTP(){
+  const boxes=document.querySelectorAll('.otp-box');
+  const code=Array.from(boxes).map(b=>b.value).join('');
+  if(code.length<6){toast("Fill in all 6 digits, Finn's waiting 🙃");return;}
+  const btn=document.getElementById('otp-verify-btn');
+  btn.disabled=true;btn.textContent='Verifying…';
+  document.getElementById('otp-error').textContent='';
+
+  // ── BACKEND CALL: POST CONFIG.API_VERIFY_OTP {email: pendingEmail, code}
+  // On success, backend returns {token, user:{email,trialStart,trialEnd,subStatus,...}}
+  // On failure, returns {error: "invalid_code"} or {error: "expired"}
+  //
+  // const res = await fetch(CONFIG.API_VERIFY_OTP,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:pendingEmail,code})});
+  // const data = await res.json();
+  // if(!res.ok){document.getElementById('otp-error').textContent="That's not it chief. Try again.";btn.disabled=false;btn.textContent='Verify Code';return;}
+  // state.session={token:data.token,email:pendingEmail,expiresAt:new Date(Date.now()+30*24*3600*1000).toISOString()};
+  // state.user=data.user;
+
+  // DEMO: simulate verified account
+  await new Promise(r=>setTimeout(r,800));
+  if(code!=='000000'){ // demo: any code except 000000 works
+    state.session={token:'demo_token_'+Date.now(),email:pendingEmail,expiresAt:new Date(Date.now()+30*24*3600*1000).toISOString()};
+    const now=new Date();
+    const trialEnd=new Date(now.getTime()+7*24*3600*1000);
+    state.user={email:pendingEmail,trialStart:now.toISOString(),trialEnd:trialEnd.toISOString(),subStatus:'trialing',hadPreviousPayment:false};
+    save();clearInterval(otpTimerInterval);
+    bootApp();
+  }else{
+    document.getElementById('otp-error').textContent="That's not it chief. Try again.";
+    btn.disabled=false;btn.textContent='Verify Code';
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+//  NAVIGATION
+// ═══════════════════════════════════════════════════════
+function showScreen(name){
+  document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
+  document.getElementById('screen-'+name).classList.add('active');
+}
+function goTo(screen){
+  document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
+  document.getElementById('screen-'+screen).classList.add('active');
+  const navEl=document.querySelector(`[data-screen="${screen}"]`);
+  if(navEl) navEl.classList.add('active');
+  if(screen==='dash')     renderDash();
+  if(screen==='cats')     renderCats();
+  if(screen==='tx')       renderTxList();
+  if(screen==='broke')    renderBroke();
+  if(screen==='share')    renderShare();
+  if(screen==='insights') renderInsights();
+  if(screen==='friends')  renderFriends();
+  if(screen==='paywall')  mountStripeCard();
+}
+
+// ═══════════════════════════════════════════════════════
+//  BANNER + LOCKS
+// ═══════════════════════════════════════════════════════
+function updateBanner(){
+  const banner=document.getElementById('status-banner');
+  const ustate=getUserState();
+  // Position banner below notch area
+  banner.style.top='0px';
+
+  if(ustate==='trial'){
+    const days=trialDaysLeft();
+    const pct=(days/7)*100;
+    const barColor=days>3?'var(--green)':days>1?'var(--warn)':'var(--danger)';
+    const msg=days>3?"Finn is yours — enjoy the ride.":days>1?`Trial ending soon. Don't let Finn go.`:days===1?"Last day. Make it count.":"Your trial is up. Finn misses you already.";
+    banner.className='show trial';
+    banner.style.display='flex';
+    banner.innerHTML=`<span style="font-size:12px;flex:1;">🕐 Free Trial — <strong>${days} day${days!==1?'s':''}</strong> left · <em style="font-style:italic;color:var(--text-dim);">${msg}</em></span><div class="trial-bar-wrap" style="width:80px;"><div class="trial-bar" style="width:${pct}%;background:${barColor}"></div></div>`;
+    setBannerHeight(42);
+  }else if(ustate==='grace'){
+    const days=graceDaysLeft();
+    const cls=days>=3?'grace-yellow':days>=2?'grace-orange':'grace-red';
+    banner.className=`show ${cls}`;
+    banner.style.display='flex';
+    banner.innerHTML=`<span style="flex:1;font-size:13px;">⚠️ Payment failed — <strong>${days} day${days!==1?'s':''}</strong> to update your card</span><button class="banner-btn warn-btn" onclick="showPaywall()">Update Payment</button>`;
+    setBannerHeight(48);
+  }else if(ustate==='free-expired'||ustate==='grace-expired'){
+    banner.className='show upgrade';
+    banner.style.display='flex';
+    banner.innerHTML=`<span style="flex:1;font-size:13px;color:var(--text-dim);">You're on the free tier — Go Pro to unlock everything</span><button class="banner-btn" onclick="showPaywall()">Upgrade</button>`;
+    setBannerHeight(48);
+  }else{
+    banner.style.display='none';
+    setBannerHeight(0);
+  }
+}
+
+function setBannerHeight(h){
+  document.documentElement.style.setProperty('--banner-h',h+'px');
+  const banner=document.getElementById('status-banner');
+  if(h>0){
+    banner.style.position='absolute';
+    banner.style.top='0px';
+    // push screens down
+    document.querySelectorAll('.screen').forEach(s=>s.style.paddingTop=h+'px');
+  }else{
+    document.querySelectorAll('.screen').forEach(s=>s.style.paddingTop='');
+  }
+}
+
+function applyLocks(){
+  const pro=isPro();
+  // Balance blur
+  const balWrap=document.getElementById('dash-balance-wrap');
+  let existing=balWrap.querySelector('.lock-overlay');
+  if(!pro){
+    if(!existing){
+      const ov=makeLockOverlay();balWrap.appendChild(ov);
+    }
+    document.getElementById('dash-balance').style.filter='blur(8px)';
+  }else{
+    if(existing)existing.remove();
+    document.getElementById('dash-balance').style.filter='';
+  }
+
+  // TX add button
+  const txBtn=document.getElementById('tx-add-btn');
+  if(txBtn)txBtn.disabled=!pro;
+
+  // CSV
+  const csvBtn=document.getElementById('csv-label-btn');
+  if(csvBtn){csvBtn.style.opacity=pro?'1':'0.4';csvBtn.style.pointerEvents=pro?'auto':'none';}
+
+  // Share actions
+  const shareWrap=document.getElementById('share-actions-wrap');
+  if(shareWrap){
+    let slo=shareWrap.querySelector('.lock-overlay');
+    if(!pro){if(!slo){const ov=makeLockOverlay();shareWrap.appendChild(ov);}}
+    else{if(slo)slo.remove();}
+  }
+
+  // Challenge btn
+  const chBtn=document.getElementById('new-challenge-btn');
+  if(chBtn)chBtn.style.opacity=pro?'1':'0.7';
+
+  // Cat chart overlay
+  const catWrap=document.getElementById('cat-chart-wrap-outer');
+  if(catWrap){
+    let clo=catWrap.querySelector('.lock-overlay');
+    if(!pro){if(!clo){const ov=makeLockOverlay();catWrap.appendChild(ov);}}
+    else{if(clo)clo.remove();}
+  }
+}
+
+function makeLockOverlay(){
+  const div=document.createElement('div');
+  div.className='lock-overlay';
+  div.onclick=showPaywall;
+  div.innerHTML='<div class="lock-badge">🔒 Pro move — upgrade to unlock</div>';
+  return div;
+}
+
+function showPaywall(){
+  goTo('paywall');
+  const ustate=getUserState();
+  const sub=document.getElementById('paywall-sub-text');
+  if(ustate==='grace-expired')sub.textContent="Your grace period is up. Update your card to get back in.";
+  else if(ustate==='grace')sub.textContent="Update your card to keep your Finn Pro access.";
+  else sub.textContent="Unlock everything Finn has to offer.";
+}
+
+// ═══════════════════════════════════════════════════════
+//  STRIPE PAYMENT
+// ═══════════════════════════════════════════════════════
+function mountStripeCard(){
+  const el=document.getElementById('stripe-card-element');
+  if(stripeCardElement&&el&&!el.hasChildNodes()){
+    try{stripeCardElement.mount('#stripe-card-element');}
+    catch(e){el.innerHTML='<div style="color:var(--text-dim);font-size:13px;padding:4px;">Card input loads when Stripe key is configured.</div>';}
+  }
+}
+
+async function handlePayment(){
+  const btn=document.getElementById('pay-btn');
+  const errEl=document.getElementById('pay-error');
+  btn.disabled=true;btn.textContent='Processing…';errEl.textContent='';
+
+  // ── BACKEND CALL: your backend creates a PaymentIntent/Subscription
+  // const {paymentMethod, error} = await stripe.createPaymentMethod({type:'card',card:stripeCardElement});
+  // if(error){errEl.textContent=error.message;btn.disabled=false;btn.textContent='Start Finn Pro 🚀';return;}
+  // const res = await fetch(CONFIG.API_CREATE_SUB,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({paymentMethodId:paymentMethod.id,email:state.user.email,priceId:CONFIG.STRIPE_PRICE_ID})});
+  // const data = await res.json();
+  // if(!res.ok){const isFirst=!state.user.hadPreviousPayment;errEl.textContent=isFirst?"Card said no. Try another one?":"Payment failed. Finn's got your back though — try again.";btn.disabled=false;btn.textContent='Start Finn Pro 🚀';return;}
+  // state.user.subStatus='active';state.user.hadPreviousPayment=true;state.user.paymentFailedAt=null;state.user.gracePeriodExpiry=null;
+
+  // DEMO: simulate success
+  await new Promise(r=>setTimeout(r,1200));
+  const ustate=getUserState();
+  const isGraceUpdate=ustate==='grace';
+  state.user.subStatus='active';
+  state.user.subExpiry=new Date(Date.now()+30*24*3600*1000).toISOString();
+  state.user.hadPreviousPayment=true;
+  state.user.paymentFailedAt=null;state.user.gracePeriodExpiry=null;
+  save();
+  btn.disabled=false;btn.textContent='Start Finn Pro 🚀';
+  updateBanner();applyLocks();
+  spawnConfetti();
+  const msg=isGraceUpdate?"Payment sorted. You're back in. Finn was worried for a second.":"You're officially a Finn Pro. Let's get this bag. 💰";
+  toast(msg);
+  setTimeout(()=>goTo('dash'),1800);
+}
+
+function spawnConfetti(){
+  const colors=['#00FF87','#00D4FF','#FFB800','#FF6EC7','#A855F7'];
+  for(let i=0;i<40;i++){
+    const c=document.createElement('div');c.className='confetti-piece';
+    c.style.cssText=`left:${Math.random()*100}vw;top:-10px;background:${colors[Math.floor(Math.random()*colors.length)]};animation-delay:${Math.random()*0.6}s;animation-duration:${0.9+Math.random()*0.6}s;width:${6+Math.random()*8}px;height:${6+Math.random()*8}px;border-radius:${Math.random()>0.5?'50%':'2px'};`;
+    document.body.appendChild(c);setTimeout(()=>c.remove(),2000);
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+//  TX TABS
+// ═══════════════════════════════════════════════════════
+function setTxTab(mode){
+  txMode=mode;
+  document.getElementById('tab-expense').classList.toggle('active',mode==='expense');
+  document.getElementById('tab-income').classList.toggle('active',mode==='income');
+  document.getElementById('tx-cat-row').style.display=mode==='income'?'none':'';
+  document.getElementById('tx-add-btn').textContent=mode==='income'?'+ Add Income':'+ Add Expense';
+  document.getElementById('tx-add-btn').className='btn-add'+(mode==='income'?' income-btn':'');
+  document.getElementById('tx-form-box').className='tx-form'+(mode==='income'?' income-mode':'');
+  document.getElementById('tx-desc').placeholder=mode==='income'?'e.g. Paycheck, Freelance, Gift…':'e.g. Starbucks, Netflix…';
+}
+
+// ═══════════════════════════════════════════════════════
+//  COMPUTED
+// ═══════════════════════════════════════════════════════
+function getExpenseTxs(){return state.transactions.filter(t=>t.type!=='income');}
+function getIncomeTxs(){return state.transactions.filter(t=>t.type==='income');}
+function getMonthExpenses(){
+  const now=new Date();
+  return getExpenseTxs().filter(t=>{const d=new Date(t.date);return d.getMonth()===now.getMonth()&&d.getFullYear()===now.getFullYear();});
+}
+function getMonthIncomeTotal(){
+  const now=new Date();
+  const fromTx=getIncomeTxs().filter(t=>{const d=new Date(t.date);return d.getMonth()===now.getMonth()&&d.getFullYear()===now.getFullYear();}).reduce((s,t)=>s+t.amount,0);
+  return state.monthlyIncome+fromTx;
+}
+function getAvgDaily(){
+  const txs=getExpenseTxs();if(!txs.length)return 0;
+  const minDate=new Date(Math.min(...txs.map(t=>new Date(t.date))));
+  const days=Math.max(1,Math.ceil((new Date()-minDate)/86400000));
+  return txs.reduce((s,t)=>s+t.amount,0)/days;
+}
+function getDaysLeft(){const d=getAvgDaily();return d?Math.floor(state.balance/d):null;}
+function getBrokeDate(){const d=getDaysLeft();if(d===null)return null;const dt=new Date();dt.setDate(dt.getDate()+d);return dt;}
+function getMonthlyTotal(){return getMonthExpenses().reduce((s,t)=>s+t.amount,0);}
+function getCatTotals(){
+  const t={};for(const c of Object.keys(CATS))t[c]=0;
+  getExpenseTxs().forEach(tx=>{t[tx.cat]=(t[tx.cat]||0)+tx.amount;});return t;
+}
+
+// ═══════════════════════════════════════════════════════
+//  FINN QUOTES
+// ═══════════════════════════════════════════════════════
+const BQ={
+  safe:["Looking good. Finn approves.","Currently winning. Don't blow it.","Your future self says thanks."],
+  warn:["Getting tight. Time to cool it.","Things are getting spicy. The bad kind.","Houston, we have a spending problem."],
+  crit:["Finn is sweating. Cut something now.","This is fine. (It's not fine.)","Bro. We need to talk.","At this rate, you'll be paying in vibes."],
+};
+function finnQuote(days){
+  if(days===null)return '"Add transactions and I\'ll tell you something depressing."';
+  const arr=days>14?BQ.safe:days>7?BQ.warn:BQ.crit;
+  return '"'+arr[Math.floor(Math.random()*arr.length)]+'"';
+}
+const GRACE_QUOTE='"Heads up — your payment didn\'t go through. Sort it out and we\'re good."';
+
+// ═══════════════════════════════════════════════════════
+//  RENDER DASHBOARD
+// ═══════════════════════════════════════════════════════
+function renderDash(){
+  const uname=state.user&&state.user.email?state.user.email.split('@')[0]:'friend';
+  document.getElementById('dash-greeting').textContent=`Hey ${uname} 👋`;
+  document.getElementById('dash-balance').innerHTML=`<span>$</span>${fmt(state.balance)}`;
+  document.getElementById('dash-income-num').textContent='$'+getMonthIncomeTotal().toFixed(0);
+  document.getElementById('dash-daily').textContent='$'+getAvgDaily().toFixed(2);
+  document.getElementById('dash-monthly').textContent='$'+getMonthlyTotal().toFixed(0);
+  const days=getDaysLeft();
+  const color=days===null?'var(--green)':days>14?'#00FF87':days>7?'#FFB800':'#FF4D4D';
+  document.getElementById('dash-broke-card').style.borderLeftColor=color;
+  if(days!==null){
+    document.getElementById('dash-days').textContent=days;
+    document.getElementById('dash-broke-date').textContent=`You'll run out around ${getBrokeDate().toLocaleDateString('en-US',{month:'long',day:'numeric'})}`;
+    const pct=Math.min(100,(days/60)*100);
+    document.getElementById('dash-broke-bar').style.cssText=`width:${pct}%;background:${color}`;
+    const cls=days>14?'tag-green':days>7?'tag-warn':'tag-danger';
+    const lbl=days>14?'✅ Healthy':days>7?'⚠️ Warning':'🚨 Critical';
+    document.getElementById('dash-status-tag').innerHTML=`<span class="tag ${cls}">${lbl}</span>`;
+  }else{
+    document.getElementById('dash-days').textContent='–';
+    document.getElementById('dash-broke-date').textContent='Add transactions to see your Broke Date';
+    document.getElementById('dash-status-tag').innerHTML='<span class="tag tag-green">🟢 Getting started</span>';
+  }
+  const ustate=getUserState();
+  const q=ustate==='grace'?GRACE_QUOTE:finnQuote(days);
+  document.getElementById('dash-finn-quote').textContent=q;
+  applyLocks();
+}
+
+// ═══════════════════════════════════════════════════════
+//  ADD / EDIT / DELETE TRANSACTIONS
+// ═══════════════════════════════════════════════════════
+function addTransaction(){
+  if(!isPro()){showPaywall();return;}
+  const date=document.getElementById('tx-date').value;
+  const amount=parseFloat(document.getElementById('tx-amount').value);
+  const desc=document.getElementById('tx-desc').value.trim();
+  let cat=txMode==='income'?'income':document.getElementById('tx-cat').value;
+  if(!date||isNaN(amount)||!desc){toast("Fill in all the fields, bestie 🙂");return;}
+  if(cat==='auto')cat=autoCat(desc);
+  const tx={id:Date.now(),date,amount:Math.abs(amount),desc,cat,type:txMode};
+  state.transactions.unshift(tx);
+  if(txMode==='income'){state.balance+=tx.amount;toast(`+$${tx.amount.toFixed(2)} logged 💚`);}
+  else{
+    state.balance=Math.max(0,state.balance-tx.amount);
+    const big=tx.amount>200?` $${tx.amount.toFixed(0)} on ${cat === 'shopping'?'shopping?! Finn is not judging. Actually he is.':'that? Bold move.'}`:` "${desc}" logged 💸`;
+    toast(tx.amount>200?`$${tx.amount.toFixed(0)} on shopping? Finn is not judging. Actually he is.`:` "${desc}" logged 💸`);
+  }
+  save();
+  document.getElementById('tx-amount').value='';document.getElementById('tx-desc').value='';
+  if(txMode==='expense')document.getElementById('tx-cat').value='auto';
+  renderTxList();
+}
+
+function renderTxList(){
+  const el=document.getElementById('tx-list');
+  if(!state.transactions.length){el.innerHTML='<div class="empty-state"><div class="empty-emoji">💸</div><div class="empty-text">"Nothing yet.<br>You\'re either broke or enlightened."</div></div>';return;}
+  const grouped={};
+  state.transactions.forEach(t=>{(grouped[t.date]=grouped[t.date]||[]).push(t);});
+  const sorted=Object.keys(grouped).sort((a,b)=>new Date(b)-new Date(a));
+  let html='';
+  sorted.forEach(date=>{
+    html+=`<div class="tx-date-group">${formatDateLabel(date)}</div>`;
+    grouped[date].forEach(t=>{
+      const c=CATS[t.cat]||CATS.other,isIncome=t.type==='income';
+      html+=`<div class="tx-item">
+        <div class="tx-emoji">${c.emoji}</div>
+        <div class="tx-info"><div class="tx-desc">${escHtml(t.desc)}</div><div class="tx-cat">${c.label}${isIncome?' · Income':''}</div></div>
+        <div class="tx-amount${isIncome?' income':''}">${isIncome?'+':'-'}$${t.amount.toFixed(2)}</div>
+        <div class="tx-actions">
+          <button class="tx-btn" onclick="openEdit(${t.id})">✏️</button>
+          <button class="tx-btn del" onclick="deleteTx(${t.id})">🗑️</button>
+        </div>
+      </div>`;
+    });
+  });
+  el.innerHTML=html;
+}
+
+function deleteTx(id){
+  if(!isPro()){showPaywall();return;}
+  const tx=state.transactions.find(t=>t.id===id);if(!tx)return;
+  if(tx.type==='income')state.balance=Math.max(0,state.balance-tx.amount);
+  else state.balance+=tx.amount;
+  state.transactions=state.transactions.filter(t=>t.id!==id);
+  save();renderTxList();toast('Gone. 🗑️');
+}
+
+function openEdit(id){
+  if(!isPro()){showPaywall();return;}
+  const tx=state.transactions.find(t=>t.id===id);if(!tx)return;
+  document.getElementById('edit-id').value=id;
+  document.getElementById('edit-date').value=tx.date;
+  document.getElementById('edit-amount').value=tx.amount;
+  document.getElementById('edit-desc').value=tx.desc;
+  document.getElementById('edit-cat').value=tx.type==='income'?'other':tx.cat;
+  document.getElementById('edit-cat-row').style.display=tx.type==='income'?'none':'';
+  document.getElementById('edit-modal').classList.add('open');
+}
+function closeModal(){document.getElementById('edit-modal').classList.remove('open');}
+function saveEdit(){
+  const id=parseInt(document.getElementById('edit-id').value);
+  const date=document.getElementById('edit-date').value;
+  const amount=parseFloat(document.getElementById('edit-amount').value);
+  const desc=document.getElementById('edit-desc').value.trim();
+  const cat=document.getElementById('edit-cat').value;
+  if(!date||isNaN(amount)||!desc){toast("Fill in all fields 🙂");return;}
+  const idx=state.transactions.findIndex(t=>t.id===id);if(idx===-1)return;
+  const old=state.transactions[idx];
+  if(old.type==='income')state.balance=state.balance-old.amount+amount;
+  else state.balance=state.balance+old.amount-amount;
+  state.balance=Math.max(0,state.balance);
+  state.transactions[idx]={...old,date,amount:Math.abs(amount),desc,cat};
+  save();closeModal();renderTxList();toast('Saved! ✅');
+}
+document.getElementById('edit-modal').addEventListener('click',function(e){if(e.target===this)closeModal();});
+
+function handleCSV(event){
+  if(!isPro()){showPaywall();return;}
+  const file=event.target.files[0];if(!file)return;
+  const reader=new FileReader();
+  reader.onload=e=>{
+    const lines=e.target.result.split('\n').slice(1);let count=0;
+    lines.forEach(line=>{const cols=line.split(',');if(cols.length<3)return;const date=cols[0].trim(),desc=cols[1].trim(),amount=parseFloat(cols[2].trim());if(!date||!desc||isNaN(amount))return;state.transactions.push({id:Date.now()+count,date,desc,amount:Math.abs(amount),cat:autoCat(desc),type:'expense'});count++;});
+    save();renderTxList();toast(`Imported ${count} transactions 📥`);
+  };
+  reader.readAsText(file);
+}
+
+// ═══════════════════════════════════════════════════════
+//  CATEGORIES + BUDGETS
+// ═══════════════════════════════════════════════════════
+function renderCats(){
+  const totals=getCatTotals();
+  const grandTotal=Object.values(totals).reduce((s,v)=>s+v,0);
+  document.getElementById('cat-total').textContent='$'+grandTotal.toFixed(0);
+  const entries=Object.entries(totals).filter(([k,v])=>v>0&&k!=='income').sort((a,b)=>b[1]-a[1]);
+  const labels=[],data=[],colors=[];
+  entries.forEach(([k,v])=>{labels.push(CATS[k].label);data.push(v);colors.push(CATS[k].color);});
+  const ctx=document.getElementById('cat-chart').getContext('2d');
+  if(catChart)catChart.destroy();
+  catChart=new Chart(ctx,{type:'doughnut',data:{labels,datasets:[{data,backgroundColor:colors,borderWidth:0,hoverOffset:4}]},options:{cutout:'72%',plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>` $${c.parsed.toFixed(2)}`}}},animation:{animateRotate:true,duration:800}}});
+  const listEl=document.getElementById('cat-list');
+  if(!entries.length){listEl.innerHTML='<div class="empty-state"><div class="empty-emoji">🍩</div><div class="empty-text">"No spending yet.<br>You\'re frugal or living on air."</div></div>';return;}
+  listEl.innerHTML=entries.map(([key,val])=>{
+    const c=CATS[key],pct=grandTotal?val/grandTotal*100:0;
+    const budget=state.budgets[key];
+    const budgetPct=budget?Math.min(100,val/budget*100):pct;
+    const barColor=budget?(val>budget?'#FF4D4D':val>budget*0.8?'#FFB800':c.color):c.color;
+    const budgetLabel=budget?`$${val.toFixed(0)} / $${budget}${val>budget?' 🚨':val>budget*0.8?' ⚠️':''}`:`${pct.toFixed(1)}% of total`;
+    return `<div class="cat-row">
+      <div class="cat-row-top"><div class="cat-dot" style="background:${c.color}"></div><div style="font-size:17px">${c.emoji}</div><div class="cat-name">${c.label}</div><div class="cat-amt" style="color:${c.color}">$${val.toFixed(0)}</div></div>
+      <div class="cat-budget-row"><div class="cat-budget-bar-wrap"><div class="cat-budget-bar" style="width:${budgetPct}%;background:${barColor}"></div></div><div class="cat-budget-label">${budgetLabel}</div><button class="cat-set-budget" onclick="isPro()?toggleBudgetInput('${key}'):showPaywall()">${budget?'edit':'+ limit'}</button></div>
+      <div id="budget-input-${key}" style="display:none"><div class="budget-inline"><input type="number" inputmode="decimal" placeholder="Monthly limit $" id="budget-val-${key}"><button onclick="saveBudget('${key}')">Set</button></div></div>
+    </div>`;
+  }).join('');
+}
+
+function toggleBudgetInput(key){
+  const el=document.getElementById(`budget-input-${key}`);
+  if(!el.style.display||el.style.display==='none'){el.style.display='block';const inp=document.getElementById(`budget-val-${key}`);if(state.budgets[key])inp.value=state.budgets[key];inp.focus();}
+  else el.style.display='none';
+}
+function saveBudget(key){
+  const val=parseFloat(document.getElementById(`budget-val-${key}`).value);
+  if(isNaN(val)||val<=0){toast("Enter a valid budget 🙂");return;}
+  state.budgets[key]=val;save();renderCats();toast(`${CATS[key].label} budget: $${val}/mo 🎯`);
+}
+
+// ═══════════════════════════════════════════════════════
+//  BROKE DATE
+// ═══════════════════════════════════════════════════════
+function renderBroke(){
+  const days=getDaysLeft(),daily=getAvgDaily();
+  document.getElementById('broke-daily').textContent='$'+daily.toFixed(2);
+  document.getElementById('broke-monthly-rate').textContent='$'+(daily*30).toFixed(0);
+  if(days!==null){
+    document.getElementById('broke-days-big').textContent=days;
+    document.getElementById('broke-date-big').textContent=getBrokeDate().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric'});
+    const pct=Math.min(100,(days/60)*100),color=days>14?'#00FF87':days>7?'#FFB800':'#FF4D4D';
+    document.getElementById('health-bar').style.cssText=`width:${pct}%;background:${color}`;
+    document.getElementById('broke-days-big').style.color=color;
+  }else{
+    document.getElementById('broke-days-big').textContent='∞';document.getElementById('broke-days-big').style.color='var(--green)';
+    document.getElementById('broke-date-big').textContent='Start adding transactions';
+    document.getElementById('health-bar').style.cssText='width:50%;background:var(--green)';
+  }
+  document.getElementById('broke-finn-say').textContent=finnQuote(days);
+}
+
+// ═══════════════════════════════════════════════════════
+//  INSIGHTS
+// ═══════════════════════════════════════════════════════
+function renderInsights(){
+  const totals=getCatTotals(),txs=state.transactions,insights=[];
+  const coffeeCount=txs.filter(t=>['starbucks','dunkin','coffee','cafe'].some(k=>t.desc.toLowerCase().includes(k))).length;
+  if(coffeeCount>0)insights.push({emoji:'☕',text:`You've spent on coffee ${coffeeCount} time${coffeeCount>1?'s':''} this month`,sub:'Caffeine is an investment, right?'});
+  const sortedCats=Object.entries(totals).sort((a,b)=>b[1]-a[1]);
+  if(sortedCats[0][1]>0){const[topCat,topAmt]=sortedCats[0];insights.push({emoji:CATS[topCat].emoji,text:`${CATS[topCat].label} is your #1 weakness at $${topAmt.toFixed(0)}`,sub:'No judgement. Okay, maybe a little.'});}
+  if(totals.subscriptions>0)insights.push({emoji:'📡',text:`Subscriptions draining $${totals.subscriptions.toFixed(0)}/mo`,sub:'Death by a thousand streams.'});
+  if(txs.length>=10)insights.push({emoji:'⚡',text:`${txs.length} transactions logged`,sub:txs.length>15?'You really like spending.':'Active spender energy.'});
+  for(const[key,budget]of Object.entries(state.budgets)){const spent=totals[key]||0;if(spent>budget)insights.push({emoji:'🚨',text:`Over budget on ${CATS[key].label}!`,sub:`$${spent.toFixed(0)} vs $${budget} limit.`});else if(spent>budget*0.8)insights.push({emoji:'⚠️',text:`${CATS[key].label} budget almost gone`,sub:`$${(budget-spent).toFixed(0)} left of $${budget}.`});}
+  const monthInc=getMonthIncomeTotal(),monthSpend=getMonthlyTotal();
+  if(monthInc>0&&monthSpend>monthInc)insights.push({emoji:'📉',text:`Spent more than earned this month`,sub:`Income $${monthInc.toFixed(0)} · Spent $${monthSpend.toFixed(0)}`});
+  else if(monthInc>0&&monthSpend<monthInc)insights.push({emoji:'📈',text:`Saved $${(monthInc-monthSpend).toFixed(0)} this month!`,sub:"Finn is genuinely surprised."});
+  const days=getDaysLeft();
+  if(days!==null&&days<14)insights.push({emoji:'💀',text:`Only ${days} days until broke`,sub:'This is your sign to chill.'});
+  if(!insights.length)insights.push({emoji:'🔮',text:'No insights yet',sub:"Add transactions and I'll have plenty to say."});
+
+  // Free tier: show only 1, blur rest
+  const pro=isPro();
+  const visible=pro?insights:insights.slice(0,1);
+  let html=visible.map(i=>`<div class="insight-card"><div class="insight-emoji">${i.emoji}</div><div class="insight-text">${i.text}</div><div class="insight-sub">${i.sub}</div></div>`).join('');
+  if(!pro&&insights.length>1){html+=`<div class="insight-card" style="filter:blur(5px);pointer-events:none;"><div class="insight-emoji">🔒</div><div class="insight-text">More insights unlocked with Finn Pro</div><div class="insight-sub">Upgrade to see all ${insights.length} insights</div></div>`;}
+  document.getElementById('insights-list').innerHTML=html;
+  renderFix();
+}
+
+function renderFix(){
+  const totals=getCatTotals();
+  const days=getDaysLeft(),daily=getAvgDaily(),fixes=[];
+  if(totals.food>80){const s=20/7,nd=daily>s?Math.floor(state.balance/(daily-s)):9999,gain=days!==null?nd-days:0;fixes.push({icon:'🍔',title:'Cut food by $20/week',sub:'Skip 2-3 takeouts. Cook once, eat twice.',gain:gain>0?`+${gain} days until broke`:'More runway'});}
+  if(totals.subscriptions>30){const s=totals.subscriptions*0.4/30,nd=daily>s?Math.floor(state.balance/(daily-s)):9999,gain=days!==null?nd-days:0;fixes.push({icon:'📱',title:'Audit your subscriptions',sub:'You probably have 2+ you forgot about.',gain:gain>0?`+${gain} days`:'+extra runway'});}
+  if(totals.shopping>50){const s=15/7,nd=daily>s?Math.floor(state.balance/(daily-s)):9999,gain=days!==null?nd-days:0;fixes.push({icon:'🛍️',title:'48hr rule on shopping',sub:'Wait 2 days before anything over $30.',gain:gain>0?`+${gain} days`:'+extra runway'});}
+  if(!fixes.length)fixes.push({icon:'✨',title:'Keep it up!',sub:"You're spending reasonably. Finn is impressed.",gain:'Living your best life'});
+  document.getElementById('fix-list').innerHTML=fixes.map(f=>`<div class="fix-card"><div class="fix-icon">${f.icon}</div><div><div class="fix-title">${f.title}</div><div class="fix-sub">${f.sub}</div><span class="fix-gain">${f.gain}</span></div></div>`).join('');
+}
+
+// ═══════════════════════════════════════════════════════
+//  SHARE
+// ═══════════════════════════════════════════════════════
+const ROASTS=["Your money leaves faster than your motivation.","At this rate, ramen is a lifestyle, not a choice.","Good news: you're very generous. Bad news: to corporations.","Your bank account is crying. Quietly.","The audacity to check this. Respect."];
+const CARD_QUOTES=["Your wallet is sweating. 💦","Finn says the end is near. Financially speaking.","Broke szn approaching.","Not broke. Just... resting."];
+function renderShare(){
+  const daily=getAvgDaily(),bd=getBrokeDate(),days=getDaysLeft();
+  document.getElementById('share-bal').textContent='$'+fmt(state.balance);
+  document.getElementById('share-daily').textContent='$'+daily.toFixed(2);
+  document.getElementById('share-broke').textContent=bd?bd.toLocaleDateString('en-US',{month:'short',day:'numeric'}):'–';
+  document.getElementById('share-quote').textContent=CARD_QUOTES[days===null?3:days>14?0:days>7?2:3];
+  if(state.transactions.length>0)document.getElementById('share-roast').textContent=ROASTS[Math.floor(Math.random()*ROASTS.length)];
+}
+function copyCard(){
+  if(!isPro()){showPaywall();return;}
+  const text=`🟢 FINN — My Snapshot\n💰 Balance: $${fmt(state.balance)}\n🔥 Daily Burn: $${getAvgDaily().toFixed(2)}\n💀 Broke Date: ${getBrokeDate()?getBrokeDate().toLocaleDateString():'Unknown'}\n📅 Days Left: ${getDaysLeft()??'–'}\n\nmade with Finn`;
+  navigator.clipboard.writeText(text).then(()=>toast('Copied! 📋')).catch(()=>toast('Copy failed'));
+}
+function shareCard(){
+  if(!isPro()){showPaywall();return;}
+  const text=`🟢 Finn says I have ${getDaysLeft()??'?'} days until I'm broke. Track yours!`;
+  if(navigator.share)navigator.share({title:'My Finn Card',text});
+  else navigator.clipboard.writeText(text).then(()=>toast('Copied for sharing! 📤'));
+}
+
+// ═══════════════════════════════════════════════════════
+//  FRIENDS + CHALLENGES
+// ═══════════════════════════════════════════════════════
+function renderFriends(){
+  const pro=isPro();
+  document.getElementById('new-challenge-btn').textContent=pro?'+ Start a Challenge':'🔒 Start a Challenge (Pro)';
+  const el=document.getElementById('challenges-list');
+  const challenges=state.challenges||[];
+  if(!challenges.length){
+    el.innerHTML='<div class="empty-state"><div class="empty-emoji">🏆</div><div class="empty-text">"Your friends are out here spending.<br>Prove them wrong."</div></div>';return;
+  }
+  el.innerHTML=challenges.map(ch=>{
+    const deadline=new Date(ch.deadline);
+    const daysLeft=Math.max(0,Math.ceil((deadline-new Date())/86400000));
+    const me=ch.members.find(m=>m.me)||ch.members[0];
+    const sorted=[...ch.members].sort((a,b)=>b.pct-a.pct);
+    const myRank=sorted.findIndex(m=>m.me)+1;
+    const rankComment=myRank===1?"You're winning. Don't get cocky.":myRank===sorted.length?"Yikes. Finn believes in you. Barely.":"You're in the pack. Time to sprint.";
+    const lb=sorted.map((m,i)=>{
+      const medal=i===0?'🥇':i===1?'🥈':i===2?'🥉':''+(i+1)+'.';
+      return `<div class="leaderboard-row">
+        <div class="lb-rank">${medal}</div>
+        <div class="lb-name ${m.me?'lb-me':''}">${m.name}${m.me?' (you)':''}</div>
+        <div class="lb-bar-wrap"><div class="lb-bar" style="width:${m.pct}%;background:${m.me?'var(--green)':'rgba(255,255,255,0.3)'}"></div></div>
+        <div class="lb-pct" style="color:${m.me?'var(--green)':'var(--text-dim)'}">${m.pct}%</div>
+      </div>`;
+    }).join('');
+    return `<div class="challenge-card">
+      <div class="challenge-title">${ch.emoji||'🏆'} ${ch.name}</div>
+      <div class="challenge-meta">Target: $${ch.target} · ${daysLeft} days left · ${ch.members.length} people</div>
+      <div class="challenge-bar-wrap"><div class="challenge-bar" style="width:${me.pct}%"></div></div>
+      <div style="font-size:12px;color:var(--text-dim);margin-bottom:12px;">Your progress: ${me.pct}% · ${rankComment}</div>
+      <div style="font-size:12px;font-weight:700;color:var(--text-dim);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;">Leaderboard</div>
+      ${lb}
+      ${pro?`<button style="margin-top:12px;width:100%;background:var(--green-dim);border:1px solid rgba(0,255,135,0.2);border-radius:10px;padding:10px;color:var(--green);font-size:13px;font-weight:600;cursor:pointer;" onclick="updateProgress('${ch.id}')">Update My Progress</button>`:''}
+      <button style="margin-top:8px;width:100%;background:transparent;border:1px solid rgba(255,255,255,0.08);border-radius:10px;padding:10px;color:var(--text-dim);font-size:13px;cursor:pointer;" onclick="copyInvite('${ch.id}')">📎 Copy Invite Link</button>
+    </div>`;
+  }).join('');
+}
+
+function toggleNewChallenge(){
+  const f=document.getElementById('new-challenge-form');
+  f.classList.toggle('open');
+  if(f.classList.contains('open')){document.getElementById('ch-deadline').value=daysFromNow(30);}
+}
+
+function createChallenge(){
+  const name=document.getElementById('ch-name').value.trim();
+  const target=parseFloat(document.getElementById('ch-target').value);
+  const deadline=document.getElementById('ch-deadline').value;
+  if(!name||isNaN(target)||!deadline){toast("Fill everything in, Finn's watching 🙂");return;}
+  const ch={id:'c'+Date.now(),name,target,deadline,emoji:'🎯',members:[{name:'You',pct:0,me:true}]};
+  state.challenges=[ch,...(state.challenges||[])];
+  save();
+  document.getElementById('new-challenge-form').classList.remove('open');
+  document.getElementById('ch-name').value='';document.getElementById('ch-target').value='';
+  renderFriends();toast(`"${name}" challenge created! 🚀 Share the link to invite friends.`);
+}
+
+function updateProgress(id){
+  const ch=(state.challenges||[]).find(c=>c.id===id);if(!ch)return;
+  const me=ch.members.find(m=>m.me);if(!me)return;
+  const val=prompt(`Update your progress for "${ch.name}" (0–100%):`);
+  const pct=parseInt(val);
+  if(isNaN(pct)||pct<0||pct>100){toast("Enter a number 0–100 🙂");return;}
+  const old=me.pct;me.pct=pct;save();renderFriends();
+  if(pct-old>=20)toast(`$${Math.round((pct-old)/100*ch.target)} in one update?! Finn is impressed. 🔥`);
+  else toast(`Progress updated to ${pct}% 📊`);
+}
+
+function copyInvite(id){
+  const link=`${window.location.origin}${window.location.pathname}?challenge=${id}`;
+  navigator.clipboard.writeText(link).then(()=>toast('Invite link copied! 📎')).catch(()=>toast('Copy failed'));
+}
+
+// ═══════════════════════════════════════════════════════
+//  UTILS
+// ═══════════════════════════════════════════════════════
+function fmt(n){return n.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});}
+function escHtml(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+function formatDateLabel(d){
+  const date=new Date(d+'T00:00:00'),today=new Date();today.setHours(0,0,0,0);
+  const diff=Math.round((today-date)/86400000);
+  if(diff===0)return'Today';if(diff===1)return'Yesterday';
+  return date.toLocaleDateString('en-US',{weekday:'long',month:'short',day:'numeric'});
+}
+function toast(msg){
+  const el=document.getElementById('toast');el.textContent=msg;el.classList.add('show');
+  setTimeout(()=>el.classList.remove('show'),3000);
+}
+
+// ══ DEMO SHORTCUT: skip auth in demo mode ══
+// Remove this block in production and rely on real auth
+(function demoBootstrap(){
+  // If no saved session exists, seed a demo trial user so the app is usable
+  if(!localStorage.getItem('finn_v3')){
+    const trialEnd=new Date(Date.now()+5*24*3600*1000); // 5 days left in trial
+    state.session={token:'demo',email:'demo@finn.app',expiresAt:new Date(Date.now()+30*24*3600*1000).toISOString()};
+    state.user={email:'demo@finn.app',trialStart:new Date(Date.now()-2*24*3600*1000).toISOString(),trialEnd:trialEnd.toISOString(),subStatus:'trialing',hadPreviousPayment:false};
+    state.balance=1240;state.monthlyIncome=2800;
+    state.transactions=SAMPLE_TXS.map(t=>({...t}));
+    state.challenges=SAMPLE_CHALLENGES.map(c=>({...c}));
+    save();
+  }
+})();
+</script>
+</body>
+</html>
